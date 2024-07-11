@@ -28,6 +28,9 @@ revm-primitives.workspace = true
 alloy-eips.workspace = true
 alloy-sol-types.workspace = true
 
+alloy-chains.workspace = true
+pevm = { git = "https://github.com/risechain/pevm", rev = "8041451583115fd77093e0251a7a6b78a5f60e8a" }
+
 [dev-dependencies]
 reth-testing-utils.workspace = true
 reth-revm = { workspace = true, features = ["test-utils"] }

@@ -478,7 +478,7 @@ where
 
     // calculate the state root
     let state_root = {
-        let state_provider = db.database.0.inner.borrow_mut();
+        let state_provider = db.database.inner.borrow_mut();
         state_provider.db.state_root(execution_outcome.state())?
     };
 

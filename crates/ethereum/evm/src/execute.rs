@@ -26,11 +26,10 @@ use reth_revm::{
     batch::{BlockBatchRecord, BlockExecutorStats},
     db::states::bundle_state::BundleRetention,
     state_change::{apply_blockhashes_update, post_block_balance_increments},
-    Evm, State,
+    DatabaseRef, Evm, State,
 };
 use revm_primitives::{
-    db::{Database, DatabaseCommit},
-    BlockEnv, CfgEnvWithHandlerCfg, EVMError, EnvWithHandlerCfg, ResultAndState,
+    db::DatabaseCommit, BlockEnv, CfgEnvWithHandlerCfg, EVMError, EnvWithHandlerCfg, ResultAndState,
 };
 
 #[cfg(feature = "std")]
@@ -67,7 +66,7 @@ where
 {
     fn eth_executor<DB>(&self, db: DB) -> EthBlockExecutor<EvmConfig, DB>
     where
-        DB: Database<Error: Into<ProviderError>>,
+        DB: DatabaseRef<Error: Into<ProviderError>>,
     {
         EthBlockExecutor::new(
             self.chain_spec.clone(),
@@ -81,22 +80,22 @@ impl<EvmConfig> BlockExecutorProvider for EthExecutorProvider<EvmConfig>
 where
     EvmConfig: ConfigureEvm,
 {
-    type Executor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type Executor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> =
         EthBlockExecutor<EvmConfig, DB>;
 
-    type BatchExecutor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type BatchExecutor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> =
         EthBatchExecutor<EvmConfig, DB>;
 
     fn executor<DB>(&self, db: DB) -> Self::Executor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         self.eth_executor(db)
     }
 
     fn batch_executor<DB>(&self, db: DB) -> Self::BatchExecutor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         let executor = self.eth_executor(db);
         EthBatchExecutor {
@@ -138,14 +137,13 @@ where
     ///
     /// It does __not__ apply post-execution changes that do not require an [EVM](Evm), for that see
     /// [`EthBlockExecutor::post_execution`].
-    fn execute_state_transitions<Ext, DB>(
+    fn _execute_state_transitions<Ext, DB>(
         &self,
         block: &BlockWithSenders,
         mut evm: Evm<'_, Ext, &mut State<DB>>,
     ) -> Result<EthExecuteOutput, BlockExecutionError>
     where
-        DB: Database,
-        DB::Error: Into<ProviderError> + std::fmt::Display,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         // apply pre execution changes
         apply_beacon_root_contract_call(
@@ -176,7 +174,7 @@ where
                     transaction_gas_limit: transaction.gas_limit(),
                     block_available_gas,
                 }
-                .into())
+                .into());
             }
 
             self.evm_config.fill_tx_env(evm.tx_mut(), transaction, *sender);
@@ -273,14 +271,14 @@ impl<EvmConfig, DB> EthBlockExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> EthBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     /// Configures a new evm configuration and block environment for the given block.
     ///
     /// # Caution
     ///
     /// This does not initialize the tx environment.
-    fn evm_env_for_block(&self, header: &Header, total_difficulty: U256) -> EnvWithHandlerCfg {
+    fn _evm_env_for_block(&self, header: &Header, total_difficulty: U256) -> EnvWithHandlerCfg {
         let mut cfg = CfgEnvWithHandlerCfg::new(Default::default(), Default::default());
         let mut block_env = BlockEnv::default();
         self.executor.evm_config.fill_cfg_and_block_env(
@@ -309,16 +307,65 @@ where
         self.on_new_block(&block.header);
 
         // 2. configure the evm and execute
-        let env = self.evm_env_for_block(&block.header, total_difficulty);
-        let output = {
-            let evm = self.executor.evm_config.evm_with_env(&mut self.state, env);
-            self.executor.execute_state_transitions(block, evm)
-        }?;
+        let spec_id = crate::config::revm_spec(
+            self.chain_spec(),
+            &reth_chainspec::Head {
+                number: block.header.number,
+                timestamp: block.header.timestamp,
+                difficulty: block.header.difficulty,
+                total_difficulty,
+                hash: Default::default(),
+            },
+        );
+        let mut block_env = BlockEnv::default();
+        self.executor.evm_config.fill_block_env(
+            &mut block_env,
+            &block.header,
+            spec_id >= revm_primitives::SpecId::MERGE,
+        );
+        let mut tx_envs = Vec::with_capacity(block.body.len());
+        for (sender, transaction) in block.transactions_with_sender() {
+            let mut tx_env = revm_primitives::TxEnv::default();
+            self.executor.evm_config.fill_tx_env(&mut tx_env, transaction, *sender);
+            tx_envs.push(tx_env);
+        }
+        let results = if tx_envs.len() < 4 || block.header.gas_used < 2_000_000 {
+            pevm::execute_revm_sequential(
+                &self.state,
+                alloy_chains::Chain::mainnet(),
+                spec_id,
+                block_env,
+                tx_envs,
+            )
+        } else {
+            pevm::execute_revm(
+                &self.state,
+                alloy_chains::Chain::mainnet(),
+                spec_id,
+                block_env,
+                tx_envs,
+                core::num::NonZeroUsize::new(8).unwrap(),
+            )
+        }
+        .unwrap_or_else(|err| panic!("{:?}", err));
+        let mut cumulative_gas_used = 0;
+        let mut receipts = Vec::with_capacity(block.body.len());
+        for (transaction, ResultAndState { result, state }) in block.transactions().zip(results) {
+            cumulative_gas_used += result.gas_used();
+            receipts.push(Receipt {
+                tx_type: transaction.tx_type(),
+                success: result.is_success(),
+                cumulative_gas_used,
+                logs: result.into_logs(),
+                ..Default::default()
+            });
+            self.state.commit(state);
+        }
 
         // 3. apply post execution changes
         self.post_execution(block, total_difficulty)?;
 
-        Ok(output)
+        Ok(EthExecuteOutput { receipts, requests: Vec::new(), gas_used: cumulative_gas_used })
     }
 
     /// Apply settings before a new block is executed.
@@ -363,7 +410,7 @@ where
 impl<EvmConfig, DB> Executor<DB> for EthBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm,
-    DB: Database<Error: Into<ProviderError> + std::fmt::Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = BlockExecutionOutput<Receipt>;
@@ -411,7 +458,7 @@ impl<EvmConfig, DB> EthBatchExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> BatchExecutor<DB> for EthBatchExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = ExecutionOutcome;
