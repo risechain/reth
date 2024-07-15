@@ -28,8 +28,7 @@ use reth_revm::state_change::post_block_withdrawals_balance_increments;
 use reth_tasks::TaskSpawner;
 use reth_transaction_pool::TransactionPool;
 use revm::{
-    primitives::{BlockEnv, CfgEnvWithHandlerCfg},
-    Database, State,
+    primitives::{BlockEnv, CfgEnvWithHandlerCfg}, DatabaseRef, State
 };
 use std::{
     fmt,
@@ -892,7 +891,7 @@ impl WithdrawalsOutcome {
 /// Returns the withdrawals root.
 ///
 /// Returns `None` values pre shanghai
-pub fn commit_withdrawals<DB: Database<Error = ProviderError>>(
+pub fn commit_withdrawals<DB: DatabaseRef<Error = ProviderError>>(
     db: &mut State<DB>,
     chain_spec: &ChainSpec,
     timestamp: u64,

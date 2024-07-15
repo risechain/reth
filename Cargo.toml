@@ -375,15 +375,15 @@ reth-trie-common = { path = "crates/trie/common" }
 reth-trie-parallel = { path = "crates/trie/parallel" }
 
 # revm
-revm = { version = "11.0.0", features = [
+revm = { git = "https://github.com/risechain/revm", rev = "be291f3cede849c4a824f05c4ad6c014f8fb533a", features = [
     "std",
     "secp256k1",
     "blst",
 ], default-features = false }
-revm-primitives = { version = "6.0.0", features = [
+revm-primitives = { git = "https://github.com/risechain/revm", rev = "be291f3cede849c4a824f05c4ad6c014f8fb533a", features = [
     "std",
 ], default-features = false }
-revm-inspectors = "0.4"
+revm-inspectors = { git = "https://github.com/risechain/revm-inspectors", rev = "5e8e95e190ece20eaeff57c303b2f10fb451c1f2" }
 
 # eth
 alloy-chains = "0.1.18"
