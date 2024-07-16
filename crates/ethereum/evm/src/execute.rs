@@ -29,7 +29,7 @@ use reth_revm::{
     DatabaseRef, Evm, State,
 };
 use revm_primitives::{
-    db::DatabaseCommit, BlockEnv, CfgEnvWithHandlerCfg, EVMError, EnvWithHandlerCfg, ResultAndState,
+    db::DatabaseCommit, BlockEnv, CfgEnvWithHandlerCfg, EVMError, EnvWithHandlerCfg, ResultAndState
 };
 
 #[cfg(feature = "std")]
@@ -137,11 +137,11 @@ where
     ///
     /// It does __not__ apply post-execution changes that do not require an [EVM](Evm), for that see
     /// [`EthBlockExecutor::post_execution`].
-    fn _execute_state_transitions<Ext, DB>(
+    fn execute_state_transitions<Ext, DB>(
         &self,
         block: &BlockWithSenders,
         mut evm: Evm<'_, Ext, &mut State<DB>>,
-    ) -> Result<EthExecuteOutput, BlockExecutionError>
+    ) -> Result<(EthExecuteOutput, Vec<ResultAndState>), BlockExecutionError>
     where
         DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
@@ -165,6 +165,7 @@ where
         // execute transactions
         let mut cumulative_gas_used = 0;
         let mut receipts = Vec::with_capacity(block.body.len());
+        let mut results = Vec::with_capacity(block.body.len());
         for (sender, transaction) in block.transactions_with_sender() {
             // The sum of the transaction’s gas limit, Tg, and the gas utilized in this block prior,
             // must be no greater than the block’s gasLimit.
@@ -180,7 +181,7 @@ where
             self.evm_config.fill_tx_env(evm.tx_mut(), transaction, *sender);
 
             // Execute transaction.
-            let ResultAndState { result, state } = evm.transact().map_err(move |err| {
+            let result_and_state = evm.transact().map_err(move |err| {
                 let new_err = match err {
                     EVMError::Transaction(e) => EVMError::Transaction(e),
                     EVMError::Header(e) => EVMError::Header(e),
@@ -194,10 +195,11 @@ where
                     error: Box::new(new_err),
                 }
             })?;
-            evm.db_mut().commit(state);
+            results.push(result_and_state.clone());
+            evm.db_mut().commit(result_and_state.state);
 
             // append gas used
-            cumulative_gas_used += result.gas_used();
+            cumulative_gas_used += result_and_state.result.gas_used();
 
             // Push transaction changeset and calculate header bloom filter for receipt.
             receipts.push(
@@ -206,10 +208,10 @@ where
                     tx_type: transaction.tx_type(),
                     // Success flag was added in `EIP-658: Embedding transaction status code in
                     // receipts`.
-                    success: result.is_success(),
+                    success: result_and_state.result.is_success(),
                     cumulative_gas_used,
                     // convert to reth log
-                    logs: result.into_logs(),
+                    logs: result_and_state.result.into_logs(),
                     ..Default::default()
                 },
             );
@@ -233,7 +235,7 @@ where
             vec![]
         };
 
-        Ok(EthExecuteOutput { receipts, requests, gas_used: cumulative_gas_used })
+        Ok((EthExecuteOutput { receipts, requests, gas_used: cumulative_gas_used }, results))
     }
 }
 
@@ -278,7 +280,7 @@ where
     /// # Caution
     ///
     /// This does not initialize the tx environment.
-    fn _evm_env_for_block(&self, header: &Header, total_difficulty: U256) -> EnvWithHandlerCfg {
+    fn evm_env_for_block(&self, header: &Header, total_difficulty: U256) -> EnvWithHandlerCfg {
         let mut cfg = CfgEnvWithHandlerCfg::new(Default::default(), Default::default());
         let mut block_env = BlockEnv::default();
         self.executor.evm_config.fill_cfg_and_block_env(
@@ -329,7 +331,7 @@ where
             self.executor.evm_config.fill_tx_env(&mut tx_env, transaction, *sender);
             tx_envs.push(tx_env);
         }
-        let results = if tx_envs.len() < 6 || block.header.gas_used < 3_000_000 {
+        let results_parallel = if tx_envs.len() < 6 || block.header.gas_used < 3_000_000 {
             pevm::execute_revm_sequential(
                 &self.state,
                 alloy_chains::Chain::mainnet(),
@@ -348,24 +350,37 @@ where
             )
         }
         .unwrap_or_else(|err| panic!("{:?}", err));
-        let mut cumulative_gas_used = 0;
-        let mut receipts = Vec::with_capacity(block.body.len());
-        for (transaction, ResultAndState { result, state }) in block.transactions().zip(results) {
-            cumulative_gas_used += result.gas_used();
-            receipts.push(Receipt {
-                tx_type: transaction.tx_type(),
-                success: result.is_success(),
-                cumulative_gas_used,
-                logs: result.into_logs(),
-                ..Default::default()
-            });
-            self.state.commit(state);
+        let env = self.evm_env_for_block(&block.header, total_difficulty);
+        let (output_sequential, results_sequential) = {
+            let evm = self.executor.evm_config.evm_with_env(&mut self.state, env);
+            self.executor.execute_state_transitions(block, evm)
+        }?;
+        for (tx_idx, (seq, par)) in results_sequential.iter().zip(results_parallel.iter()).enumerate() {
+            if seq != par {
+                dbg!(&seq);
+                dbg!(&par);
+                panic!("Block {} mismatched at tx {tx_idx}", block.number);
+            }
         }
+        // let mut cumulative_gas_used = 0;
+        // let mut receipts = Vec::with_capacity(block.body.len());
+        // for (transaction, ResultAndState { result, state }) in block.transactions().zip(results_parallel) {
+        //     cumulative_gas_used += result.gas_used();
+        //     receipts.push(Receipt {
+        //         tx_type: transaction.tx_type(),
+        //         success: result.is_success(),
+        //         cumulative_gas_used,
+        //         logs: result.into_logs(),
+        //         ..Default::default()
+        //     });
+        //     self.state.commit(state);
+        // }
+        // let output_parallel = EthExecuteOutput { receipts, requests: Vec::new(), gas_used: cumulative_gas_used };
 
         // 3. apply post execution changes
         self.post_execution(block, total_difficulty)?;
 
-        Ok(EthExecuteOutput { receipts, requests: Vec::new(), gas_used: cumulative_gas_used })
+        Ok(output_sequential)
     }
 
     /// Apply settings before a new block is executed.

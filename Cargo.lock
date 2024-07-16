@@ -5695,7 +5695,7 @@ dependencies = [
 [[package]]
 name = "pevm"
 version = "0.1.0"
-source = "git+https://github.com/risechain/pevm?rev=5310f425ceb7e8432083f25b2d0229b648ffc0f3#5310f425ceb7e8432083f25b2d0229b648ffc0f3"
+source = "git+https://github.com/risechain/pevm?rev=8da06f1783ae8b81ebbc52b287c3575601874370#8da06f1783ae8b81ebbc52b287c3575601874370"
 dependencies = [
  "ahash",
  "alloy-chains",
