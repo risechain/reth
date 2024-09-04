@@ -28,7 +28,7 @@ use reth_revm::{
     state_change::post_block_balance_increments, Evm, State,
 };
 use revm_primitives::{
-    db::{Database, DatabaseCommit},
+    db::{DatabaseRef, DatabaseCommit},
     BlockEnv, CfgEnvWithHandlerCfg, EVMError, EnvWithHandlerCfg, ResultAndState,
 };
 
@@ -69,7 +69,7 @@ where
 {
     fn eth_executor<DB>(&self, db: DB) -> EthBlockExecutor<EvmConfig, DB>
     where
-        DB: Database<Error: Into<ProviderError>>,
+        DB: DatabaseRef<Error: Into<ProviderError>>,
     {
         EthBlockExecutor::new(
             self.chain_spec.clone(),
@@ -83,22 +83,22 @@ impl<EvmConfig> BlockExecutorProvider for EthExecutorProvider<EvmConfig>
 where
     EvmConfig: ConfigureEvm,
 {
-    type Executor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type Executor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> =
         EthBlockExecutor<EvmConfig, DB>;
 
-    type BatchExecutor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type BatchExecutor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> =
         EthBatchExecutor<EvmConfig, DB>;
 
     fn executor<DB>(&self, db: DB) -> Self::Executor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         self.eth_executor(db)
     }
 
     fn batch_executor<DB>(&self, db: DB) -> Self::BatchExecutor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         let executor = self.eth_executor(db);
         EthBatchExecutor { executor, batch_record: BlockBatchRecord::default() }
@@ -140,10 +140,9 @@ where
         &self,
         block: &BlockWithSenders,
         mut evm: Evm<'_, Ext, &mut State<DB>>,
-    ) -> Result<EthExecuteOutput, BlockExecutionError>
+    ) -> Result<(EthExecuteOutput, Vec<ResultAndState>), BlockExecutionError>
     where
-        DB: Database,
-        DB::Error: Into<ProviderError> + Display,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         // apply pre execution changes
         apply_beacon_root_contract_call(
@@ -166,6 +165,7 @@ where
         // execute transactions
         let mut cumulative_gas_used = 0;
         let mut receipts = Vec::with_capacity(block.body.len());
+        let mut results = Vec::with_capacity(block.body.len());
         for (sender, transaction) in block.transactions_with_sender() {
             // The sum of the transaction’s gas limit, Tg, and the gas utilized in this block prior,
             // must be no greater than the block’s gasLimit.
@@ -181,7 +181,7 @@ where
             self.evm_config.fill_tx_env(evm.tx_mut(), transaction, *sender);
 
             // Execute transaction.
-            let ResultAndState { result, state } = evm.transact().map_err(move |err| {
+            let result_and_state = evm.transact().map_err(move |err| {
                 let new_err = match err {
                     EVMError::Transaction(e) => EVMError::Transaction(e),
                     EVMError::Header(e) => EVMError::Header(e),
@@ -195,10 +195,11 @@ where
                     error: Box::new(new_err),
                 }
             })?;
-            evm.db_mut().commit(state);
+            results.push(result_and_state.clone());
+            evm.db_mut().commit(result_and_state.state);
 
             // append gas used
-            cumulative_gas_used += result.gas_used();
+            cumulative_gas_used += result_and_state.result.gas_used();
 
             // Push transaction changeset and calculate header bloom filter for receipt.
             receipts.push(
@@ -207,10 +208,10 @@ where
                     tx_type: transaction.tx_type(),
                     // Success flag was added in `EIP-658: Embedding transaction status code in
                     // receipts`.
-                    success: result.is_success(),
+                    success: result_and_state.result.is_success(),
                     cumulative_gas_used,
                     // convert to reth log
-                    logs: result.into_logs(),
+                    logs: result_and_state.result.into_logs(),
                     ..Default::default()
                 },
             );
@@ -234,7 +235,7 @@ where
             vec![]
         };
 
-        Ok(EthExecuteOutput { receipts, requests, gas_used: cumulative_gas_used })
+        Ok((EthExecuteOutput { receipts, requests, gas_used: cumulative_gas_used }, results))
     }
 }
 
@@ -272,7 +273,7 @@ impl<EvmConfig, DB> EthBlockExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> EthBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     /// Configures a new evm configuration and block environment for the given block.
     ///
@@ -308,16 +309,64 @@ where
         self.on_new_block(&block.header);
 
         // 2. configure the evm and execute
+        let spec_id = crate::config::revm_spec(
+            self.chain_spec(),
+            &reth_chainspec::Head {
+                number: block.header.number,
+                timestamp: block.header.timestamp,
+                difficulty: block.header.difficulty,
+                total_difficulty,
+                hash: Default::default(),
+            },
+        );
+        let mut block_env = BlockEnv::default();
+        self.executor.evm_config.fill_block_env(
+            &mut block_env,
+            &block.header,
+            spec_id >= revm_primitives::SpecId::MERGE,
+        );
+        let mut tx_envs = Vec::with_capacity(block.body.len());
+        for (sender, transaction) in block.transactions_with_sender() {
+            let mut tx_env = revm_primitives::TxEnv::default();
+            self.executor.evm_config.fill_tx_env(&mut tx_env, transaction, *sender);
+            tx_envs.push(tx_env);
+        }
+        let results_parallel = if tx_envs.len() < 10 || block.header.gas_used < 4_000_000 {
+            pevm::execute_revm_sequential(
+                &self.state,
+                &pevm::chain::PevmEthereum::mainnet(),
+                spec_id,
+                block_env,
+                tx_envs,
+            )
+        } else {
+            pevm::Pevm::default().execute_revm_parallel(
+                &self.state,
+                &pevm::chain::PevmEthereum::mainnet(),
+                spec_id,
+                block_env,
+                tx_envs,
+                core::num::NonZeroUsize::new(8).unwrap(),
+            )
+        }
+        .unwrap_or_else(|err| panic!("{:?}", err));
         let env = self.evm_env_for_block(&block.header, total_difficulty);
-        let output = {
+        let (output_sequential, results_sequential) = {
             let evm = self.executor.evm_config.evm_with_env(&mut self.state, env);
             self.executor.execute_state_transitions(block, evm)
         }?;
+        for (tx_idx, (seq, par)) in results_sequential.iter().zip(results_parallel.iter()).enumerate() {
+            if seq != par {
+                dbg!(&seq);
+                dbg!(&par);
+                panic!("Block {} mismatched at tx {tx_idx}", block.number);
+            }
+        }
 
         // 3. apply post execution changes
         self.post_execution(block, total_difficulty)?;
 
-        Ok(output)
+        Ok(output_sequential)
     }
 
     /// Apply settings before a new block is executed.
@@ -362,7 +411,7 @@ where
 impl<EvmConfig, DB> Executor<DB> for EthBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = BlockExecutionOutput<Receipt>;
@@ -409,7 +458,7 @@ impl<EvmConfig, DB> EthBatchExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> BatchExecutor<DB> for EthBatchExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = ExecutionOutcome;
@@ -465,7 +514,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_eips::{
+    use reth_chainspec::{
         eip2935::{HISTORY_STORAGE_ADDRESS, HISTORY_STORAGE_CODE},
         eip4788::{BEACON_ROOTS_ADDRESS, BEACON_ROOTS_CODE, SYSTEM_ADDRESS},
         eip7002::{WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS, WITHDRAWAL_REQUEST_PREDEPLOY_CODE},
