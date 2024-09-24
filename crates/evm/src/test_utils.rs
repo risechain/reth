@@ -10,8 +10,7 @@ use reth_execution_types::ExecutionOutcome;
 use reth_primitives::{BlockWithSenders, Receipt};
 use reth_prune_types::PruneModes;
 use reth_storage_errors::provider::ProviderError;
-use revm::State;
-use revm_primitives::db::Database;
+use revm::{DatabaseRef, State};
 use std::{fmt::Display, sync::Arc};
 
 /// A [`BlockExecutorProvider`] that returns mocked execution results.
@@ -28,20 +27,20 @@ impl MockExecutorProvider {
 }
 
 impl BlockExecutorProvider for MockExecutorProvider {
-    type Executor<DB: Database<Error: Into<ProviderError> + Display>> = Self;
+    type Executor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> = Self;
 
-    type BatchExecutor<DB: Database<Error: Into<ProviderError> + Display>> = Self;
+    type BatchExecutor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> = Self;
 
     fn executor<DB>(&self, _: DB) -> Self::Executor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         self.clone()
     }
 
     fn batch_executor<DB>(&self, _: DB) -> Self::BatchExecutor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         self.clone()
     }
