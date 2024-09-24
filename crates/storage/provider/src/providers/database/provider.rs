@@ -842,8 +842,7 @@ impl<TX: DbTxMut + DbTx + 'static, N: NodeTypes> DatabaseProvider<TX, N> {
                 self.take_shard::<T>(sharded_key_factory(partial_key, u64::MAX))?;
             last_shard.extend(indices);
             // Chunk indices and insert them in shards of N size.
-            let indices = last_shard;
-            let mut chunks = indices.chunks(sharded_key::NUM_OF_INDICES_IN_SHARD).peekable();
+            let mut chunks = last_shard.chunks(sharded_key::NUM_OF_INDICES_IN_SHARD).peekable();
             while let Some(list) = chunks.next() {
                 let highest_block_number = if chunks.peek().is_some() {
                     *list.last().expect("`chunks` does not return empty list")
