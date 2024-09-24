@@ -580,12 +580,12 @@ impl TransactionPtr {
         if let Some(lock) = self.lock.try_lock() {
             lock
         } else {
-            tracing::debug!(
-                target: "libmdbx",
-                txn = %self.txn as usize,
-                backtrace = %std::backtrace::Backtrace::force_capture(),
-                "Transaction lock is already acquired, blocking..."
-            );
+            // tracing::debug!(
+            //     target: "libmdbx",
+            //     txn = %self.txn as usize,
+            //     backtrace = %std::backtrace::Backtrace::force_capture(),
+            //     "Transaction lock is already acquired, blocking..."
+            // );
             self.lock.lock()
         }
     }
