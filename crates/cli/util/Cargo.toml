@@ -31,8 +31,12 @@ tracy-client = { workspace = true, optional = true, features = ["demangle"] }
 tikv-jemallocator = { workspace = true, optional = true }
 libc = "0.2"
 
+mimalloc = { workspace = true, optional = true }
+
 [features]
 jemalloc = ["dep:tikv-jemallocator"]
 jemalloc-prof = ["jemalloc", "tikv-jemallocator?/profiling"]
 
 tracy-allocator = ["dep:tracy-client"]
+
+mimalloc = ["dep:mimalloc"]

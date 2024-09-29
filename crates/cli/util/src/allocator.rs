@@ -2,7 +2,10 @@
 
 // We use jemalloc for performance reasons.
 cfg_if::cfg_if! {
-    if #[cfg(all(feature = "jemalloc", unix))] {
+    if #[cfg(all(feature = "mimalloc"))] {
+        type AllocatorInner = mimalloc::MiMalloc;
+    }
+    else if #[cfg(all(feature = "jemalloc", unix))] {
         type AllocatorInner = tikv_jemallocator::Jemalloc;
     } else {
         type AllocatorInner = std::alloc::System;

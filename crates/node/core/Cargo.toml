@@ -90,6 +90,7 @@ optimism = [
 ]
 # Features for vergen to generate correct env vars
 jemalloc = []
+mimalloc = []
 asm-keccak = []
 
 [build-dependencies]

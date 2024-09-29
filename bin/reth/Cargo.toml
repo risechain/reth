@@ -96,7 +96,7 @@ reth-discv4.workspace = true
 tempfile.workspace = true
 
 [features]
-default = ["jemalloc"]
+default = ["mimalloc"]
 
 dev = ["reth-cli-commands/dev"]
 
@@ -109,6 +109,8 @@ jemalloc = [
 ]
 jemalloc-prof = ["reth-cli-util/jemalloc"]
 tracy-allocator = ["reth-cli-util/tracy-allocator"]
+
+mimalloc = ["reth-cli-util/mimalloc", "reth-node-core/mimalloc"]
 
 min-error-logs = ["tracing/release_max_level_error"]
 min-warn-logs = ["tracing/release_max_level_warn"]
