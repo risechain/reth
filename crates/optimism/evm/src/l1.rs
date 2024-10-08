@@ -263,10 +263,10 @@ impl RethL1BlockInfo for L1BlockInfo {
 pub fn ensure_create2_deployer<DB>(
     chain_spec: Arc<OpChainSpec>,
     timestamp: u64,
-    db: &mut revm::State<DB>,
+    db: &mut revm::db::State<DB>,
 ) -> Result<(), DB::Error>
 where
-    DB: revm::Database,
+    DB: revm::DatabaseRef,
 {
     // If the canyon hardfork is active at the current timestamp, and it was not active at the
     // previous block timestamp (heuristically, block time is not perfectly constant at 2s), and the
@@ -284,6 +284,7 @@ where
         let mut acc_info = acc.account_info().unwrap_or_default();
         acc_info.code_hash = CREATE_2_DEPLOYER_CODEHASH;
         acc_info.code = Some(Bytecode::new_raw(Bytes::from_static(&CREATE_2_DEPLOYER_BYTECODE)));
+        drop(acc);
 
         // Convert the cache account back into a revm account and mark it as touched.
         let mut revm_acc: revm::primitives::Account = acc_info.into();

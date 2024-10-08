@@ -22,9 +22,9 @@ use reth_revm::{
     batch::BlockBatchRecord, db::states::bundle_state::BundleRetention,
     state_change::post_block_balance_increments, Evm, State,
 };
+use revm::DatabaseRef;
 use revm_primitives::{
-    db::{Database, DatabaseCommit},
-    BlockEnv, CfgEnvWithHandlerCfg, EnvWithHandlerCfg, ResultAndState,
+    db::DatabaseCommit, BlockEnv, CfgEnvWithHandlerCfg, EnvWithHandlerCfg, ResultAndState,
 };
 use std::{fmt::Display, sync::Arc};
 use tracing::trace;
@@ -56,7 +56,7 @@ where
 {
     fn op_executor<DB>(&self, db: DB) -> OpBlockExecutor<EvmConfig, DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display>,
     {
         OpBlockExecutor::new(
             self.chain_spec.clone(),
@@ -70,21 +70,21 @@ impl<EvmConfig> BlockExecutorProvider for OpExecutorProvider<EvmConfig>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
 {
-    type Executor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type Executor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> =
         OpBlockExecutor<EvmConfig, DB>;
 
-    type BatchExecutor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type BatchExecutor<DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync> =
         OpBatchExecutor<EvmConfig, DB>;
     fn executor<DB>(&self, db: DB) -> Self::Executor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         self.op_executor(db)
     }
 
     fn batch_executor<DB>(&self, db: DB) -> Self::BatchExecutor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
     {
         let executor = self.op_executor(db);
         OpBatchExecutor { executor, batch_record: BlockBatchRecord::default() }
@@ -117,7 +117,7 @@ where
         mut evm: Evm<'_, Ext, &mut State<DB>>,
     ) -> Result<(Vec<Receipt>, u64), BlockExecutionError>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display>,
     {
         let mut system_caller = SystemCaller::new(&self.evm_config, &self.chain_spec);
 
@@ -146,19 +146,19 @@ where
             // The sum of the transaction’s gas limit, Tg, and the gas utilized in this block prior,
             // must be no greater than the block’s gasLimit.
             let block_available_gas = block.header.gas_limit - cumulative_gas_used;
-            if transaction.gas_limit() > block_available_gas &&
-                (is_regolith || !transaction.is_system_transaction())
+            if transaction.gas_limit() > block_available_gas
+                && (is_regolith || !transaction.is_system_transaction())
             {
                 return Err(BlockValidationError::TransactionGasLimitMoreThanAvailableBlockGas {
                     transaction_gas_limit: transaction.gas_limit(),
                     block_available_gas,
                 }
-                .into())
+                .into());
             }
 
             // An optimism block should never contain blob transactions.
             if matches!(transaction.tx_type(), TxType::Eip4844) {
-                return Err(OptimismBlockExecutionError::BlobTransactionRejected.into())
+                return Err(OptimismBlockExecutionError::BlobTransactionRejected.into());
             }
 
             // Cache the depositor account prior to the state transition for the deposit nonce.
@@ -210,8 +210,9 @@ where
                 // The deposit receipt version was introduced in Canyon to indicate an update to how
                 // receipt hashes should be computed when set. The state transition process ensures
                 // this is only set for post-Canyon deposit transactions.
-                deposit_receipt_version: (transaction.is_deposit() &&
-                    self.chain_spec
+                deposit_receipt_version: (transaction.is_deposit()
+                    && self
+                        .chain_spec
                         .is_fork_active_at_timestamp(OptimismHardfork::Canyon, block.timestamp))
                 .then_some(1),
             });
@@ -260,7 +261,7 @@ impl<EvmConfig, DB> OpBlockExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> OpBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     /// Configures a new evm configuration and block environment for the given block.
     ///
@@ -333,7 +334,7 @@ where
 impl<EvmConfig, DB> Executor<DB> for OpBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = BlockExecutionOutput<Receipt>;
@@ -411,7 +412,7 @@ impl<EvmConfig, DB> OpBatchExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> BatchExecutor<DB> for OpBatchExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display> + Send + Sync,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = ExecutionOutcome;
