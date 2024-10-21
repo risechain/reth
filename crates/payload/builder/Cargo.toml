@@ -36,7 +36,6 @@ metrics.workspace = true
 # misc
 tracing.workspace = true
 
-[dev-dependencies]
 revm.workspace = true
 
 [features]

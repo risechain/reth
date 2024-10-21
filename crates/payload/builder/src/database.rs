@@ -4,6 +4,7 @@ use reth_primitives::revm_primitives::{
     db::{Database, DatabaseRef},
     AccountInfo, Bytecode,
 };
+use revm::CacheState;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, HashMap},
@@ -55,6 +56,22 @@ impl CachedReads {
         storage: HashMap<U256, U256>,
     ) {
         self.accounts.insert(address, CachedAccount { info: Some(info), storage });
+    }
+}
+
+impl From<CachedReads> for CacheState {
+    fn from(value: CachedReads) -> Self {
+        let mut result = Self::new(true);
+        for (address, account) in value.accounts {
+            if let Some(info) = account.info {
+                result.insert_account_with_storage(
+                    address,
+                    info,
+                    account.storage.into_iter().collect(),
+                );
+            }
+        }
+        result
     }
 }
 
