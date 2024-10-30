@@ -619,11 +619,12 @@ where
                                 .cache
                                 .contracts
                                 .iter()
-                                .map(|(hash, code)| (*hash, code.original_bytes()))
+                                .map(|entry| (*entry.key(), entry.value().original_bytes()))
                                 .collect();
 
-                            for (address, account) in &statedb.cache.accounts {
-                                let hashed_address = keccak256(address);
+                            for entry in &statedb.cache.accounts {
+                                let (address, account) = (entry.key(), entry.value());
+                                let hashed_address = keccak256(entry.key());
                                 hashed_state.accounts.insert(
                                     hashed_address,
                                     account.account.as_ref().map(|a| a.info.clone().into()),

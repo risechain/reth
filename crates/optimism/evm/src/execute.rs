@@ -23,7 +23,7 @@ use reth_revm::{
     state_change::post_block_balance_increments, Evm, State,
 };
 use revm_primitives::{
-    db::{Database, DatabaseCommit},
+    db::{DatabaseRef, DatabaseCommit},
     BlockEnv, CfgEnvWithHandlerCfg, EnvWithHandlerCfg, ResultAndState,
 };
 use std::{fmt::Display, sync::Arc};
@@ -56,7 +56,7 @@ where
 {
     fn op_executor<DB>(&self, db: DB) -> OpBlockExecutor<EvmConfig, DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display>,
     {
         OpBlockExecutor::new(
             self.chain_spec.clone(),
@@ -70,21 +70,21 @@ impl<EvmConfig> BlockExecutorProvider for OpExecutorProvider<EvmConfig>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
 {
-    type Executor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type Executor<DB: DatabaseRef<Error: Into<ProviderError> + Display>> =
         OpBlockExecutor<EvmConfig, DB>;
 
-    type BatchExecutor<DB: Database<Error: Into<ProviderError> + Display>> =
+    type BatchExecutor<DB: DatabaseRef<Error: Into<ProviderError> + Display>> =
         OpBatchExecutor<EvmConfig, DB>;
     fn executor<DB>(&self, db: DB) -> Self::Executor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display>,
     {
         self.op_executor(db)
     }
 
     fn batch_executor<DB>(&self, db: DB) -> Self::BatchExecutor<DB>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display>,
     {
         let executor = self.op_executor(db);
         OpBatchExecutor { executor, batch_record: BlockBatchRecord::default() }
@@ -120,7 +120,7 @@ where
         state_hook: Option<F>,
     ) -> Result<(Vec<Receipt>, u64), BlockExecutionError>
     where
-        DB: Database<Error: Into<ProviderError> + Display>,
+        DB: DatabaseRef<Error: Into<ProviderError> + Display>,
         F: OnStateHook,
     {
         let mut system_caller =
@@ -266,7 +266,7 @@ impl<EvmConfig, DB> OpBlockExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> OpBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display>,
 {
     /// Configures a new evm configuration and block environment for the given block.
     ///
@@ -353,7 +353,7 @@ where
 impl<EvmConfig, DB> Executor<DB> for OpBlockExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display>,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = BlockExecutionOutput<Receipt>;
@@ -457,7 +457,7 @@ impl<EvmConfig, DB> OpBatchExecutor<EvmConfig, DB> {
 impl<EvmConfig, DB> BatchExecutor<DB> for OpBatchExecutor<EvmConfig, DB>
 where
     EvmConfig: ConfigureEvm<Header = Header>,
-    DB: Database<Error: Into<ProviderError> + Display>,
+    DB: DatabaseRef<Error: Into<ProviderError> + Display>,
 {
     type Input<'a> = BlockExecutionInput<'a, BlockWithSenders>;
     type Output = ExecutionOutcome;

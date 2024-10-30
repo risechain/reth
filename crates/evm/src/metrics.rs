@@ -86,9 +86,9 @@ impl ExecutorMetrics {
                 let storage_slots = state
                     .cache
                     .accounts
-                    .values()
-                    .filter_map(|account| {
-                        account.account.as_ref().map(|account| account.storage.len())
+                    .iter()
+                    .filter_map(|entry| {
+                        entry.account.as_ref().map(|account| account.storage.len())
                     })
                     .sum::<usize>();
                 let bytecodes = state.cache.contracts.len();
