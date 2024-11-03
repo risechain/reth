@@ -522,11 +522,11 @@ impl<T: TransactionOrdering> TxPool<T> {
 
         match self.all_transactions.insert_tx(tx, on_chain_balance, on_chain_nonce) {
             Ok(InsertOk { transaction, move_to, replaced_tx, updates, .. }) => {
+                let UpdateOutcome { promoted, discarded } = self.process_updates(updates);
                 // replace the new tx and remove the replaced in the subpool(s)
                 self.add_new_transaction(transaction.clone(), replaced_tx.clone(), move_to);
                 // Update inserted transactions metric
                 self.metrics.inserted_transactions.increment(1);
-                let UpdateOutcome { promoted, discarded } = self.process_updates(updates);
 
                 let replaced = replaced_tx.map(|(tx, _)| tx);
 
