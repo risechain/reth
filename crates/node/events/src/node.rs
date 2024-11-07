@@ -504,7 +504,8 @@ where
             } else if let Some(latest_block) = this.state.latest_block {
                 let now =
                     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                if now - this.state.latest_block_time.unwrap_or(0) > 60 {
+                // https://github.com/paradigmxyz/reth/commit/523bfb9c81ad7c2493882d83d0c9a6d0bcb2ce52#diff-9b49eb32052d06f5011c679046579e019121ea44f698926d8c407a08c29fa570R507
+                if now.saturating_sub(this.state.latest_block_time.unwrap_or(0)) > 60 {
                     // Once we start receiving consensus nodes, don't emit status unless stalled for
                     // 1 minute
                     info!(
