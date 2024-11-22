@@ -522,13 +522,33 @@ impl<T: TransactionOrdering> TxPool<T> {
 
         match self.all_transactions.insert_tx(tx, on_chain_balance, on_chain_nonce) {
             Ok(InsertOk { transaction, move_to, replaced_tx, updates, .. }) => {
-                // replace the new tx and remove the replaced in the subpool(s)
-                self.add_new_transaction(transaction.clone(), replaced_tx.clone(), move_to);
-                // Update inserted transactions metric
-                self.metrics.inserted_transactions.increment(1);
-                let UpdateOutcome { promoted, discarded } = self.process_updates(updates);
+                // https://github.com/paradigmxyz/reth/issues/12286
+                let replaced = replaced_tx.clone().map(|(tx, _)| tx);
 
-                let replaced = replaced_tx.map(|(tx, _)| tx);
+                let (promoted, discarded) = if updates.is_empty() {
+                    // 99% of the cases
+                    self.add_new_transaction(transaction.clone(), replaced_tx, move_to);
+                    self.metrics.inserted_transactions.increment(1);
+                    (Vec::new(), Vec::new())
+                } else {
+                    let (prev_updates, next_updates): (Vec<_>, Vec<_>) =
+                        updates.into_iter().partition(|update| update.id < *transaction.id());
+                    let prev_processed = self.process_updates(prev_updates);
+                    self.add_new_transaction(transaction.clone(), replaced_tx, move_to);
+                    self.metrics.inserted_transactions.increment(1);
+                    let next_processed = self.process_updates(next_updates);
+                    let promoted: Vec<_> = Iterator::chain(
+                        prev_processed.promoted.into_iter(),
+                        next_processed.promoted.into_iter(),
+                    )
+                    .collect();
+                    let discarded: Vec<_> = Iterator::chain(
+                        prev_processed.discarded.into_iter(),
+                        next_processed.discarded.into_iter(),
+                    )
+                    .collect();
+                    (promoted, discarded)
+                };
 
                 // This transaction was moved to the pending pool.
                 let res = if move_to.is_pending() {

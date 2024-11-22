@@ -169,6 +169,8 @@ impl<T: TransactionOrdering> Iterator for BestTransactions<T> {
             self.add_new_transactions();
             // Remove the next independent tx with the highest priority
             let best = self.independent.pop_last()?;
+            // https://github.com/paradigmxyz/reth/issues/12340
+            self.all.remove(best.transaction.id());
             let hash = best.transaction.hash();
 
             // skip transactions that were marked as invalid
