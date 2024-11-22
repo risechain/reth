@@ -168,6 +168,10 @@ impl TransactionPool for NoopTransactionPool {
         vec![]
     }
 
+    fn pending_transactions_max(&self, _max: usize) -> Vec<Arc<ValidPoolTransaction<Self::Transaction>>> {
+        vec![]
+    }
+
     fn queued_transactions(&self) -> Vec<Arc<ValidPoolTransaction<Self::Transaction>>> {
         vec![]
     }
