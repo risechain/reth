@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{EthNetworkPrimitives, EthVersion, NetworkPrimitives, SharedTransactions};
 use alloc::{boxed::Box, sync::Arc};
-use alloy_primitives::bytes::{Buf, BufMut};
+use alloy_primitives::bytes::{Buf, BufMut, Bytes};
 use alloy_rlp::{length_of_length, Decodable, Encodable, Header};
 use core::fmt::Debug;
 
@@ -101,6 +101,7 @@ impl<N: NetworkPrimitives> ProtocolMessage<N> {
             }
             EthMessageID::GetReceipts => EthMessage::GetReceipts(RequestPair::decode(buf)?),
             EthMessageID::Receipts => EthMessage::Receipts(RequestPair::decode(buf)?),
+            EthMessageID::Raw => EthMessage::Raw(Bytes::copy_from_slice(buf)),
         };
         Ok(Self { message_type, message })
     }
@@ -229,6 +230,8 @@ pub enum EthMessage<N: NetworkPrimitives = EthNetworkPrimitives> {
         serde(bound = "N::Receipt: serde::Serialize + serde::de::DeserializeOwned")
     )]
     Receipts(RequestPair<Receipts<N::Receipt>>),
+    /// Custom raw P2P messages
+    Raw(Bytes),
 }
 
 impl<N: NetworkPrimitives> EthMessage<N> {
@@ -252,6 +255,7 @@ impl<N: NetworkPrimitives> EthMessage<N> {
             Self::NodeData(_) => EthMessageID::NodeData,
             Self::GetReceipts(_) => EthMessageID::GetReceipts,
             Self::Receipts(_) => EthMessageID::Receipts,
+            Self::Raw(_) => EthMessageID::Raw,
         }
     }
 
@@ -299,6 +303,7 @@ impl<N: NetworkPrimitives> Encodable for EthMessage<N> {
             Self::NodeData(data) => data.encode(out),
             Self::GetReceipts(request) => request.encode(out),
             Self::Receipts(receipts) => receipts.encode(out),
+            Self::Raw(bytes) => bytes.encode(out),
         }
     }
     fn length(&self) -> usize {
@@ -319,6 +324,7 @@ impl<N: NetworkPrimitives> Encodable for EthMessage<N> {
             Self::NodeData(data) => data.length(),
             Self::GetReceipts(request) => request.length(),
             Self::Receipts(receipts) => receipts.length(),
+            Self::Raw(bytes) => bytes.length(),
         }
     }
 }
@@ -401,6 +407,8 @@ pub enum EthMessageID {
     GetReceipts = 0x0f,
     /// Represents receipts.
     Receipts = 0x10,
+    /// Raw custom P2P message ID.
+    Raw = 0xff,
 }
 
 impl EthMessageID {
@@ -437,6 +445,7 @@ impl Decodable for EthMessageID {
             0x0e => Self::NodeData,
             0x0f => Self::GetReceipts,
             0x10 => Self::Receipts,
+            0xff => Self::Raw,
             _ => return Err(alloy_rlp::Error::Custom("Invalid message ID")),
         };
         buf.advance(1);
@@ -464,6 +473,7 @@ impl TryFrom<usize> for EthMessageID {
             0x0e => Ok(Self::NodeData),
             0x0f => Ok(Self::GetReceipts),
             0x10 => Ok(Self::Receipts),
+            0xff => Ok(Self::Raw),
             _ => Err("Invalid message ID"),
         }
     }

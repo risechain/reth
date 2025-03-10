@@ -35,6 +35,7 @@ use crate::{
     transactions::NetworkTransactionEvent,
     FetchClient, NetworkBuilder,
 };
+use alloy_primitives::bytes::Bytes;
 use futures::{Future, StreamExt};
 use parking_lot::Mutex;
 use reth_eth_wire::{DisconnectReason, EthNetworkPrimitives, NetworkPrimitives};
@@ -128,6 +129,8 @@ pub struct NetworkManager<N: NetworkPrimitives = EthNetworkPrimitives> {
     /// requests. This channel size is set at
     /// [`ETH_REQUEST_CHANNEL_CAPACITY`](crate::builder::ETH_REQUEST_CHANNEL_CAPACITY)
     to_eth_request_handler: Option<mpsc::Sender<IncomingEthRequest<N>>>,
+    /// Custom P2P message handler
+    to_custom_p2p_message_handler: Option<mpsc::Sender<Bytes>>,
     /// Tracks the number of active session (connected peers).
     ///
     /// This is updated via internal events and shared via `Arc` with the [`NetworkHandle`]
@@ -187,6 +190,11 @@ impl<N: NetworkPrimitives> NetworkManager<N> {
     /// [`EthRequestHandler`](crate::eth_requests::EthRequestHandler).
     pub fn set_eth_request_handler(&mut self, tx: mpsc::Sender<IncomingEthRequest<N>>) {
         self.to_eth_request_handler = Some(tx);
+    }
+
+    /// Sets the dedicated channel for custom P2P messages
+    pub fn set_custom_p2p_message_handler(&mut self, tx: mpsc::Sender<Bytes>) {
+        self.to_custom_p2p_message_handler = Some(tx);
     }
 
     /// Adds an additional protocol handler to the `RLPx` sub-protocol list.
@@ -340,6 +348,7 @@ impl<N: NetworkPrimitives> NetworkManager<N> {
             event_sender,
             to_transactions_manager: None,
             to_eth_request_handler: None,
+            to_custom_p2p_message_handler: None,
             num_active_peers,
             metrics: Default::default(),
             disconnect_metrics: Default::default(),
@@ -597,6 +606,14 @@ impl<N: NetworkPrimitives> NetworkManager<N> {
             }
             PeerMessage::Other(other) => {
                 debug!(target: "net", message_id=%other.id, "Ignoring unsupported message");
+            }
+            PeerMessage::Raw(bytes) => {
+                if let Some(handler) = &self.to_custom_p2p_message_handler {
+                    // TODO: Proper error handling
+                    let _ = handler.try_send(bytes);
+                } else {
+                    debug!(target: "net", ?bytes, "Ignoring custom message");
+                }
             }
         }
     }

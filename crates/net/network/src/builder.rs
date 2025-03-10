@@ -5,6 +5,7 @@ use crate::{
     transactions::{TransactionsManager, TransactionsManagerConfig},
     NetworkHandle, NetworkManager,
 };
+use alloy_primitives::bytes::Bytes;
 use reth_eth_wire::{EthNetworkPrimitives, NetworkPrimitives};
 use reth_network_api::test_utils::PeersHandleProvider;
 use reth_transaction_pool::TransactionPool;
@@ -64,6 +65,15 @@ impl<Tx, Eth, N: NetworkPrimitives> NetworkBuilder<Tx, Eth, N> {
         let peers = network.handle().peers_handle().clone();
         let request_handler = EthRequestHandler::new(client, peers, rx);
         NetworkBuilder { network, request_handler, transactions }
+    }
+
+    /// Wire a custom P2P message handler to the network.
+    pub fn custom_p2p_message_handler(
+        mut self,
+        to_p2p_message_handler: mpsc::Sender<Bytes>,
+    ) -> NetworkBuilder<Tx, Eth, N> {
+        self.network.set_custom_p2p_message_handler(to_p2p_message_handler);
+        self
     }
 
     /// Creates a new [`TransactionsManager`] and wires it to the network.

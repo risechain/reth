@@ -255,6 +255,7 @@ impl<N: NetworkPrimitives> ActiveSession<N> {
             EthMessage::Receipts(resp) => {
                 on_response!(resp, GetReceipts)
             }
+            EthMessage::Raw(bytes) => self.try_emit_request(PeerMessage::Raw(bytes)).into(),
         }
     }
 
@@ -297,6 +298,9 @@ impl<N: NetworkPrimitives> ActiveSession<N> {
             }
             PeerMessage::Other(other) => {
                 self.queued_outgoing.push_back(OutgoingMessage::Raw(other));
+            }
+            PeerMessage::Raw(bytes) => {
+                self.queued_outgoing.push_back(EthMessage::Raw(bytes).into());
             }
         }
     }

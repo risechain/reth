@@ -59,6 +59,8 @@ pub enum PeerMessage<N: NetworkPrimitives = EthNetworkPrimitives> {
     ///
     /// Caution: It is expected that this is a valid `eth_` capability message.
     Other(RawCapabilityMessage),
+    /// Raw custom P2P message
+    Raw(alloy_primitives::bytes::Bytes),
 }
 
 /// Request Variants that only target block related data.
