@@ -33,6 +33,11 @@ use tracing::*;
 
 use super::missing_static_data_error;
 
+// RISE WIP
+use reth_chainspec::EthChainSpec;
+use reth_revm::{primitives::KECCAK_EMPTY, state::{AccountInfo, Bytecode}};
+use reth_provider::ChainSpecProvider;
+
 /// The execution stage executes all transactions and
 /// update history indexes.
 ///
@@ -261,7 +266,9 @@ where
         + StatsReader
         + BlockHashReader
         + StateWriter<Receipt = <E::Primitives as NodePrimitives>::Receipt>
-        + StateCommitmentProvider,
+        + StateCommitmentProvider
+        // RISE WIP
+        + ChainSpecProvider,
 {
     /// Return the id of the stage
     fn id(&self) -> StageId {
@@ -290,8 +297,23 @@ where
 
         self.ensure_consistency(provider, input.checkpoint().block_number, None)?;
 
-        let db = StateProviderDatabase(LatestStateProviderRef::new(provider));
-        let mut executor = self.evm_config.batch_executor(db);
+        let _db = StateProviderDatabase(LatestStateProviderRef::new(provider));
+        // RISE WIP
+        // TODO: Set stop block?
+        let mut db = crate::stages::qmdb::Qmdb::new(start_block as i64);
+        // TODO: Better place and condition to init genesis?
+        if start_block == 1 {
+            for (address, account) in &provider.chain_spec().genesis().alloc {
+                let code = account.code.as_ref().map(|bytes| Bytecode::new_raw(bytes.clone()));
+                db.write_account(*address, Some(AccountInfo {
+                    balance: account.balance,
+                    nonce: account.nonce.unwrap_or(0),
+                    code_hash: code.as_ref().map(|code| code.hash_slow()).unwrap_or(KECCAK_EMPTY),
+                    code,
+                }));
+            }
+        }
+        let mut executor = self.evm_config.batch_executor(&db);
 
         // Progress tracking
         let mut stage_progress = start_block;
@@ -451,6 +473,10 @@ where
                 }
             }
         }
+
+        // RISE TODO: Confirm this
+        db.write_state(&state.bundle);
+        db.flush();
 
         // write output
         provider.write_state(&state, OriginalValuesKnown::Yes, StorageLocation::StaticFiles)?;

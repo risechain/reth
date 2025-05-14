@@ -13,7 +13,7 @@ workspace = true
 
 [dependencies]
 # reth
-reth-chainspec = { workspace = true, optional = true }
+reth-chainspec.workspace = true
 reth-codecs.workspace = true
 reth-config.workspace = true
 reth-consensus.workspace = true
@@ -61,9 +61,11 @@ blake3.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["rustls-tls-native-roots", "blocking"] }
 serde = { workspace = true, features = ["derive"] }
 
+# RISE WIP
+qmdb = { git = "https://github.com/risechain/qmdb", rev = "77f342cbf48c0fa86c77ea2f6a8a2c77d6ddd5a1" }
+
 [dev-dependencies]
 # reth
-reth-chainspec.workspace = true
 reth-db = { workspace = true, features = ["test-utils", "mdbx"] }
 reth-ethereum-primitives = { workspace = true, features = ["test-utils"] }
 reth-ethereum-consensus.workspace = true
@@ -95,14 +97,13 @@ criterion = { workspace = true, features = ["async_tokio"] }
 
 [features]
 test-utils = [
-    "dep:reth-chainspec",
     "reth-network-p2p/test-utils",
     "reth-db/test-utils",
     "reth-provider/test-utils",
     "reth-stages-api/test-utils",
     "dep:reth-testing-utils",
     "dep:tempfile",
-    "reth-chainspec?/test-utils",
+    "reth-chainspec/test-utils",
     "reth-consensus/test-utils",
     "reth-evm/test-utils",
     "reth-downloaders/test-utils",

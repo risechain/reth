@@ -1,5 +1,7 @@
 /// The bodies stage.
 mod bodies;
+// RISE WIP
+mod qmdb;
 /// The execution stage that generates state diff.
 mod execution;
 /// The finish stage
