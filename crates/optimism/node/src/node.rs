@@ -7,11 +7,13 @@ use crate::{
     OpEngineApiBuilder, OpEngineTypes,
 };
 use op_alloy_consensus::{interop::SafetyLevel, OpPooledTransaction};
+use op_alloy_rpc_types_engine::OpExecutionData;
 use reth_chainspec::{EthChainSpec, Hardforks};
 use reth_evm::{ConfigureEvm, EvmFactory, EvmFactoryFor};
 use reth_network::{NetworkConfig, NetworkHandle, NetworkManager, NetworkPrimitives, PeersInfo};
 use reth_node_api::{
-    AddOnsContext, FullNodeComponents, KeyHasherTy, NodeAddOns, NodePrimitives, PrimitivesTy, TxTy,
+    AddOnsContext, EngineTypes, FullNodeComponents, KeyHasherTy, NodeAddOns, NodePrimitives,
+    PrimitivesTy, TxTy,
 };
 use reth_node_builder::{
     components::{
@@ -240,7 +242,7 @@ pub struct OpAddOns<
     N: FullNodeComponents,
     EthB: EthApiBuilder<N>,
     EV = OpEngineValidatorBuilder,
-    EB = OpEngineApiBuilder<OpEngineValidatorBuilder>,
+    EB = OpEngineApiBuilder<EV>,
 > {
     /// Rpc add-ons responsible for launching the RPC servers and instantiating the RPC handlers
     /// and eth-api.
@@ -251,7 +253,7 @@ pub struct OpAddOns<
     /// network.
     pub sequencer_url: Option<String>,
     /// Enable transaction conditionals.
-    enable_tx_conditional: bool,
+    pub enable_tx_conditional: bool,
 }
 
 impl<N> Default for OpAddOns<N, OpEthApiBuilder>
@@ -275,20 +277,21 @@ where
     }
 }
 
-impl<N> NodeAddOns<N> for OpAddOns<N, OpEthApiBuilder>
+impl<N, EV> NodeAddOns<N> for OpAddOns<N, OpEthApiBuilder, EV>
 where
     N: FullNodeComponents<
         Types: NodeTypes<
             ChainSpec = OpChainSpec,
             Primitives = OpPrimitives,
             Storage = OpStorage,
-            Payload = OpEngineTypes,
+            Payload: EngineTypes<ExecutionData = OpExecutionData>,
         >,
         Evm: ConfigureEvm<NextBlockEnvCtx = OpNextBlockEnvAttributes>,
     >,
     OpEthApiError: FromEvmError<N::Evm>,
     <N::Pool as TransactionPool>::Transaction: OpPooledTx,
     EvmFactoryFor<N::Evm>: EvmFactory<Tx = op_revm::OpTransaction<TxEnv>>,
+    EV: EngineValidatorBuilder<N>,
 {
     type Handle = RpcHandle<N, OpEthApi<N>>;
 
@@ -360,20 +363,21 @@ where
     }
 }
 
-impl<N> RethRpcAddOns<N> for OpAddOns<N, OpEthApiBuilder>
+impl<N, EV> RethRpcAddOns<N> for OpAddOns<N, OpEthApiBuilder, EV>
 where
     N: FullNodeComponents<
         Types: NodeTypes<
             ChainSpec = OpChainSpec,
             Primitives = OpPrimitives,
             Storage = OpStorage,
-            Payload = OpEngineTypes,
+            Payload: EngineTypes<ExecutionData = OpExecutionData>,
         >,
         Evm: ConfigureEvm<NextBlockEnvCtx = OpNextBlockEnvAttributes>,
     >,
     OpEthApiError: FromEvmError<N::Evm>,
     <<N as FullNodeComponents>::Pool as TransactionPool>::Transaction: OpPooledTx,
     EvmFactoryFor<N::Evm>: EvmFactory<Tx = op_revm::OpTransaction<TxEnv>>,
+    EV: EngineValidatorBuilder<N>,
 {
     type EthApi = OpEthApi<N>;
 
@@ -382,21 +386,22 @@ where
     }
 }
 
-impl<N> EngineValidatorAddOn<N> for OpAddOns<N, OpEthApiBuilder>
+impl<N, EV> EngineValidatorAddOn<N> for OpAddOns<N, OpEthApiBuilder, EV>
 where
     N: FullNodeComponents<
         Types: NodeTypes<
             ChainSpec = OpChainSpec,
             Primitives = OpPrimitives,
-            Payload = OpEngineTypes,
+            Payload: EngineTypes<ExecutionData = OpExecutionData>,
         >,
     >,
     OpEthApiBuilder: EthApiBuilder<N>,
+    EV: EngineValidatorBuilder<N> + Default,
 {
-    type Validator = OpEngineValidator<N::Provider>;
+    type Validator = <EV as EngineValidatorBuilder<N>>::Validator;
 
     async fn engine_validator(&self, ctx: &AddOnsContext<'_, N>) -> eyre::Result<Self::Validator> {
-        OpEngineValidatorBuilder::default().build(ctx).await
+        EV::default().build(ctx).await
     }
 }
 
@@ -435,17 +440,18 @@ impl OpAddOnsBuilder {
 
 impl OpAddOnsBuilder {
     /// Builds an instance of [`OpAddOns`].
-    pub fn build<N>(self) -> OpAddOns<N, OpEthApiBuilder>
+    pub fn build<N, EV>(self) -> OpAddOns<N, OpEthApiBuilder, EV>
     where
         N: FullNodeComponents<Types: NodeTypes<Primitives = OpPrimitives>>,
         OpEthApiBuilder: EthApiBuilder<N>,
+        EV: Default,
     {
         let Self { sequencer_url, da_config, enable_tx_conditional } = self;
 
         OpAddOns {
             rpc_add_ons: RpcAddOns::new(
                 OpEthApiBuilder::default().with_sequencer(sequencer_url.clone()),
-                OpEngineValidatorBuilder::default(),
+                EV::default(),
                 OpEngineApiBuilder::default(),
             ),
             da_config: da_config.unwrap_or_default(),
