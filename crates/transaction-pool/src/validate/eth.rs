@@ -28,7 +28,7 @@ use reth_primitives_traits::{
     constants::MAX_TX_GAS_LIMIT_OSAKA, transaction::error::InvalidTransactionError, Block,
     GotExpected, SealedBlock,
 };
-use reth_storage_api::{StateProvider, StateProviderFactory};
+use reth_storage_api::{AccountReader, BytecodeReader, StateProviderFactory};
 use reth_tasks::TaskSpawner;
 use std::{
     marker::PhantomData,
@@ -89,7 +89,7 @@ where
         &self,
         origin: TransactionOrigin,
         transaction: Tx,
-        state: &mut Option<Box<dyn StateProvider>>,
+        state: impl AccountReader + BytecodeReader,
     ) -> TransactionValidationOutcome<Tx> {
         self.inner.validate_one_with_provider(origin, transaction, state)
     }
@@ -232,30 +232,10 @@ where
         &self,
         origin: TransactionOrigin,
         transaction: Tx,
-        maybe_state: &mut Option<Box<dyn StateProvider>>,
+        state: impl AccountReader + BytecodeReader,
     ) -> TransactionValidationOutcome<Tx> {
         match self.validate_one_no_state(origin, transaction) {
-            Ok(transaction) => {
-                // stateless checks passed, pass transaction down stateful validation pipeline
-                // If we don't have a state provider yet, fetch the latest state
-                if maybe_state.is_none() {
-                    match self.client.latest() {
-                        Ok(new_state) => {
-                            *maybe_state = Some(new_state);
-                        }
-                        Err(err) => {
-                            return TransactionValidationOutcome::Error(
-                                *transaction.hash(),
-                                Box::new(err),
-                            )
-                        }
-                    }
-                }
-
-                let state = maybe_state.as_deref().expect("provider is set");
-
-                self.validate_one_against_state(origin, transaction, state)
-            }
+            Ok(transaction) => self.validate_one_against_state(origin, transaction, state),
             Err(invalid_outcome) => invalid_outcome,
         }
     }
@@ -474,15 +454,12 @@ where
     }
 
     /// Validates a single transaction using given state provider.
-    fn validate_one_against_state<P>(
+    fn validate_one_against_state(
         &self,
         origin: TransactionOrigin,
         mut transaction: Tx,
-        state: P,
-    ) -> TransactionValidationOutcome<Tx>
-    where
-        P: StateProvider,
-    {
+        state: impl AccountReader + BytecodeReader,
+    ) -> TransactionValidationOutcome<Tx> {
         // Use provider to get account info
         let account = match state.basic_account(transaction.sender_ref()) {
             Ok(account) => account.unwrap_or_default(),
@@ -639,8 +616,13 @@ where
         origin: TransactionOrigin,
         transaction: Tx,
     ) -> TransactionValidationOutcome<Tx> {
-        let mut provider = None;
-        self.validate_one_with_provider(origin, transaction, &mut provider)
+        let provider = match self.client.latest() {
+            Ok(provider) => provider,
+            Err(err) => {
+                return TransactionValidationOutcome::Error(*transaction.hash(), Box::new(err))
+            }
+        };
+        self.validate_one_with_provider(origin, transaction, provider)
     }
 
     /// Validates all given transactions.
@@ -648,10 +630,20 @@ where
         &self,
         transactions: Vec<(TransactionOrigin, Tx)>,
     ) -> Vec<TransactionValidationOutcome<Tx>> {
-        let mut provider = None;
+        let provider = match self.client.latest() {
+            Ok(provider) => provider,
+            Err(err) => {
+                return transactions
+                    .into_iter()
+                    .map(|(_, tx)| {
+                        TransactionValidationOutcome::Error(*tx.hash(), Box::new(err.clone()))
+                    })
+                    .collect()
+            }
+        };
         transactions
             .into_iter()
-            .map(|(origin, tx)| self.validate_one_with_provider(origin, tx, &mut provider))
+            .map(|(origin, tx)| self.validate_one_with_provider(origin, tx, &provider))
             .collect()
     }
 
@@ -661,10 +653,20 @@ where
         origin: TransactionOrigin,
         transactions: impl IntoIterator<Item = Tx> + Send,
     ) -> Vec<TransactionValidationOutcome<Tx>> {
-        let mut provider = None;
+        let provider = match self.client.latest() {
+            Ok(provider) => provider,
+            Err(err) => {
+                return transactions
+                    .into_iter()
+                    .map(|tx| {
+                        TransactionValidationOutcome::Error(*tx.hash(), Box::new(err.clone()))
+                    })
+                    .collect()
+            }
+        };
         transactions
             .into_iter()
-            .map(|tx| self.validate_one_with_provider(origin, tx, &mut provider))
+            .map(|tx| self.validate_one_with_provider(origin, tx, &provider))
             .collect()
     }
 
