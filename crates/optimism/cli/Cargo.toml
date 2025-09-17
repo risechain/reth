@@ -35,7 +35,7 @@ reth-node-metrics.workspace = true
 
 ## optimism
 reth-optimism-primitives.workspace = true
-reth-optimism-chainspec = { workspace = true, features = ["superchain-configs"] }
+reth-optimism-chainspec.workspace = true
 reth-optimism-consensus.workspace = true
 
 reth-chainspec.workspace = true
@@ -71,7 +71,7 @@ tempfile.workspace = true
 reth-stages = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]
-reth-optimism-chainspec = { workspace = true, features = ["std", "superchain-configs"] }
+reth-optimism-chainspec = { workspace = true, features = ["std"] }
 
 [features]
 asm-keccak = [
@@ -100,4 +100,8 @@ serde = [
     "reth-optimism-primitives/serde",
     "reth-primitives-traits/serde",
     "reth-optimism-chainspec/serde",
+]
+
+superchain-configs = [
+    "reth-optimism-chainspec/superchain-configs"
 ]
