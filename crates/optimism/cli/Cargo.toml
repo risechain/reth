@@ -74,6 +74,8 @@ reth-stages = { workspace = true, features = ["test-utils"] }
 reth-optimism-chainspec = { workspace = true, features = ["std", "superchain-configs"] }
 
 [features]
+default = ["p2p"]
+
 asm-keccak = [
     "alloy-primitives/asm-keccak",
     "reth-node-core/asm-keccak",
@@ -101,3 +103,5 @@ serde = [
     "reth-primitives-traits/serde",
     "reth-optimism-chainspec/serde",
 ]
+
+p2p = []

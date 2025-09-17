@@ -100,6 +100,7 @@ where
             Commands::Stage(command) => {
                 runner.run_command_until_exit(|ctx| command.execute::<OpNode, _>(ctx, components))
             }
+            #[cfg(feature = "p2p")]
             Commands::P2P(command) => runner.run_until_ctrl_c(command.execute::<OpNode>()),
             Commands::Config(command) => runner.run_until_ctrl_c(command.execute()),
             Commands::Recover(command) => {

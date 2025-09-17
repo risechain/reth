@@ -7,7 +7,7 @@ use reth_cli::chainspec::ChainSpecParser;
 use reth_cli_commands::{
     config_cmd, db, dump_genesis, init_cmd,
     node::{self, NoArgs},
-    p2p, prune, re_execute, recover, stage,
+    prune, re_execute, recover, stage,
 };
 use std::{fmt, sync::Arc};
 
@@ -46,8 +46,9 @@ pub enum Commands<Spec: ChainSpecParser = OpChainSpecParser, Ext: clap::Args + f
     #[command(name = "stage")]
     Stage(Box<stage::Command<Spec>>),
     /// P2P Debugging utilities
+    #[cfg(feature = "p2p")]
     #[command(name = "p2p")]
-    P2P(Box<p2p::Command<Spec>>),
+    P2P(Box<reth_cli_commands::p2p::Command<Spec>>),
     /// Write config to stdout
     #[command(name = "config")]
     Config(config_cmd::Command),
@@ -80,6 +81,7 @@ impl<
             Self::DumpGenesis(cmd) => cmd.chain_spec(),
             Self::Db(cmd) => cmd.chain_spec(),
             Self::Stage(cmd) => cmd.chain_spec(),
+            #[cfg(feature = "p2p")]
             Self::P2P(cmd) => cmd.chain_spec(),
             Self::Config(_) => None,
             Self::Recover(cmd) => cmd.chain_spec(),
