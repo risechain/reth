@@ -89,7 +89,7 @@ When updating this, also update:
 
 The Minimum Supported Rust Version (MSRV) of this project is [1.81.0](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html).
 
-See the book for detailed instructions on how to [build from source](https://paradigmxyz.github.io/reth/installation/source.html).
+See the book for detailed instructions on how to [build from source](https://reth.rs/installation/installation.html).
 
 To fully test Reth, you will need to have [Geth installed](https://geth.ethereum.org/docs/getting-started/installing-geth), but it is possible to run a subset of tests without Geth.
 
