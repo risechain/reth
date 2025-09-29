@@ -368,7 +368,7 @@ impl<T: TransactionOrdering> TxPool<T> {
 
     /// Returns an iterator that yields transactions that are ready to be included in the block with
     /// the tracked fees.
-    pub(crate) fn best_transactions(&self) -> BestTransactions<T> {
+    pub fn best_transactions(&self) -> BestTransactions<T> {
         self.pending_pool.best()
     }
 
@@ -378,7 +378,7 @@ impl<T: TransactionOrdering> TxPool<T> {
     /// If the provided attributes differ from the currently tracked fees, this will also include
     /// transactions that are unlocked by the new fees, or exclude transactions that are no longer
     /// valid with the new fees.
-    pub(crate) fn best_transactions_with_attributes(
+    pub fn best_transactions_with_attributes(
         &self,
         best_transactions_attributes: BestTransactionsAttributes,
     ) -> Box<dyn crate::traits::BestTransactions<Item = Arc<ValidPoolTransaction<T::Transaction>>>>
