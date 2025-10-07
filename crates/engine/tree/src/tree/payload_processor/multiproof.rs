@@ -668,6 +668,7 @@ pub(super) struct MultiProofTask<Factory: DatabaseProviderFactory> {
     multiproof_manager: MultiproofManager<Factory>,
     /// multi proof task metrics
     metrics: MultiProofTaskMetrics,
+    no_proof: HashedPostState,
 }
 
 impl<Factory> MultiProofTask<Factory>
@@ -702,6 +703,7 @@ where
                 max_concurrency,
             ),
             metrics,
+            no_proof: Default::default(),
         }
     }
 
@@ -850,15 +852,10 @@ where
         let (fetched_state_update, not_fetched_state_update) = hashed_state_update
             .partition_by_targets(&self.fetched_proof_targets, &self.multi_added_removed_keys);
 
-        let mut state_updates = 0;
         // If there are any accounts or storage slots that we already fetched the proofs for,
         // send them immediately, as they don't require spawning any additional multiproofs.
         if !fetched_state_update.is_empty() {
-            let _ = self.tx.send(MultiProofMessage::EmptyProof {
-                sequence_number: self.proof_sequencer.next_sequence(),
-                state: fetched_state_update,
-            });
-            state_updates += 1;
+            self.no_proof.extend(fetched_state_update);
         }
 
         // Clone+Arc MultiAddedRemovedKeys for sharing with the spawned multiproof tasks
@@ -912,7 +909,7 @@ where
 
         self.fetched_proof_targets.extend(spawned_proof_targets);
 
-        state_updates + chunks
+        chunks
     }
 
     /// Handler for new proof calculated, aggregates all the existing sequential proofs.
@@ -1042,6 +1039,10 @@ where
                             prefetch_proofs_requested,
                             updates_finished,
                         ) {
+                            let _ = self.to_sparse_trie.send(SparseTrieUpdate {
+                                state: std::mem::take(&mut self.no_proof),
+                                multiproof: Default::default(),
+                            });
                             debug!(
                                 target: "engine::root",
                                 "State updates finished and all proofs processed, ending calculation"
@@ -1107,6 +1108,10 @@ where
                             prefetch_proofs_requested,
                             updates_finished,
                         ) {
+                            let _ = self.to_sparse_trie.send(SparseTrieUpdate {
+                                state: std::mem::take(&mut self.no_proof),
+                                multiproof: Default::default(),
+                            });
                             debug!(
                                 target: "engine::root",
                                 "State updates finished and all proofs processed, ending calculation");
