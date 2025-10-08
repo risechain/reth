@@ -734,25 +734,33 @@ where
 
         // Process proof targets in chunks.
         let mut chunks = 0;
-        let should_chunk = !self.multiproof_manager.is_full();
+        let have_available_concurrency = !self.multiproof_manager.is_full();
 
         let mut spawn = |proof_targets| {
-            self.multiproof_manager.spawn_or_queue(
-                MultiproofInput {
-                    config: self.config.clone(),
-                    source: None,
-                    hashed_state_update: Default::default(),
-                    proof_targets,
-                    proof_sequence_number: self.proof_sequencer.next_sequence(),
-                    state_root_message_sender: self.tx.clone(),
-                    multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
-                }
-                .into(),
-            );
-            chunks += 1;
+            if !have_available_concurrency &&
+                let Some(PendingMultiproofTask::Regular(back)) =
+                    self.multiproof_manager.pending.back_mut()
+            {
+                back.proof_targets.extend(proof_targets);
+                // multi_added_removed_keys?
+            } else {
+                self.multiproof_manager.spawn_or_queue(
+                    MultiproofInput {
+                        config: self.config.clone(),
+                        source: None,
+                        hashed_state_update: Default::default(),
+                        proof_targets,
+                        proof_sequence_number: self.proof_sequencer.next_sequence(),
+                        state_root_message_sender: self.tx.clone(),
+                        multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
+                    }
+                    .into(),
+                );
+                chunks += 1;
+            }
         };
 
-        if should_chunk && let Some(chunk_size) = self.chunk_size {
+        if have_available_concurrency && let Some(chunk_size) = self.chunk_size {
             for proof_targets_chunk in proof_targets.chunks(chunk_size) {
                 spawn(proof_targets_chunk);
             }
@@ -863,7 +871,7 @@ where
 
         // Process state updates in chunks.
         let mut chunks = 0;
-        let should_chunk = !self.multiproof_manager.is_full();
+        let have_available_concurrency = !self.multiproof_manager.is_full();
 
         let mut spawned_proof_targets = MultiProofTargets::default();
 
@@ -875,23 +883,31 @@ where
             );
             spawned_proof_targets.extend_ref(&proof_targets);
 
-            self.multiproof_manager.spawn_or_queue(
-                MultiproofInput {
-                    config: self.config.clone(),
-                    source: Some(source),
-                    hashed_state_update,
-                    proof_targets,
-                    proof_sequence_number: self.proof_sequencer.next_sequence(),
-                    state_root_message_sender: self.tx.clone(),
-                    multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
-                }
-                .into(),
-            );
-
-            chunks += 1;
+            if !have_available_concurrency &&
+                let Some(PendingMultiproofTask::Regular(back)) =
+                    self.multiproof_manager.pending.back_mut()
+            {
+                back.hashed_state_update.extend(hashed_state_update);
+                back.proof_targets.extend(proof_targets);
+                // multi_added_removed_keys?
+            } else {
+                self.multiproof_manager.spawn_or_queue(
+                    MultiproofInput {
+                        config: self.config.clone(),
+                        source: Some(source),
+                        hashed_state_update,
+                        proof_targets,
+                        proof_sequence_number: self.proof_sequencer.next_sequence(),
+                        state_root_message_sender: self.tx.clone(),
+                        multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
+                    }
+                    .into(),
+                );
+                chunks += 1;
+            }
         };
 
-        if should_chunk && let Some(chunk_size) = self.chunk_size {
+        if have_available_concurrency && let Some(chunk_size) = self.chunk_size {
             for chunk in not_fetched_state_update.chunks(chunk_size) {
                 spawn(chunk);
             }
