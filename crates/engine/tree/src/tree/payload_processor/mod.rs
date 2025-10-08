@@ -166,15 +166,12 @@ where
     ///
     /// This returns a handle to await the final state root and to interact with the tasks (e.g.
     /// canceling)
-    pub fn spawn<P, I: ExecutableTxIterator<Evm>>(
+    pub fn spawn<P>(
         &mut self,
-        env: ExecutionEnv<Evm>,
-        transactions: I,
-        provider_builder: StateProviderBuilder<N, P>,
         consistent_view: ConsistentDbView<P>,
         trie_input: TrieInput,
         config: &TreeConfig,
-    ) -> PayloadHandle<WithTxEnv<TxEnvFor<Evm>, I::Tx>, I::Error>
+    ) -> PayloadHandle
     where
         P: DatabaseProviderFactory<Provider: BlockReader>
             + BlockReader
@@ -218,17 +215,6 @@ where
         // wire the multiproof task to the prewarm task
         let to_multi_proof = Some(multi_proof_task.state_root_message_sender());
 
-        let (prewarm_rx, execution_rx, transaction_count_hint) =
-            self.spawn_tx_iterator(transactions);
-
-        let prewarm_handle = self.spawn_caching_with(
-            env,
-            prewarm_rx,
-            transaction_count_hint,
-            provider_builder,
-            to_multi_proof.clone(),
-        );
-
         // spawn multi-proof task
         self.executor.spawn_blocking(move || {
             multi_proof_task.run();
@@ -252,35 +238,7 @@ where
             }
         });
 
-        PayloadHandle {
-            to_multi_proof,
-            prewarm_handle,
-            state_root: Some(state_root_rx),
-            transactions: execution_rx,
-        }
-    }
-
-    /// Spawns a task that exclusively handles cache prewarming for transaction execution.
-    ///
-    /// Returns a [`PayloadHandle`] to communicate with the task.
-    pub(super) fn spawn_cache_exclusive<P, I: ExecutableTxIterator<Evm>>(
-        &self,
-        env: ExecutionEnv<Evm>,
-        transactions: I,
-        provider_builder: StateProviderBuilder<N, P>,
-    ) -> PayloadHandle<WithTxEnv<TxEnvFor<Evm>, I::Tx>, I::Error>
-    where
-        P: BlockReader + StateProviderFactory + StateReader + Clone + 'static,
-    {
-        let (prewarm_rx, execution_rx, size_hint) = self.spawn_tx_iterator(transactions);
-        let prewarm_handle =
-            self.spawn_caching_with(env, prewarm_rx, size_hint, provider_builder, None);
-        PayloadHandle {
-            to_multi_proof: None,
-            prewarm_handle,
-            state_root: None,
-            transactions: execution_rx,
-        }
+        PayloadHandle { to_multi_proof, state_root: Some(state_root_rx) }
     }
 
     /// Spawns a task advancing transaction env iterator and streaming updates through a channel.
@@ -440,19 +398,15 @@ where
 }
 
 /// Handle to all the spawned tasks.
-#[derive(Debug)]
-pub struct PayloadHandle<Tx, Err> {
+#[derive(Debug, Default)]
+pub struct PayloadHandle {
     /// Channel for evm state updates
     to_multi_proof: Option<Sender<MultiProofMessage>>,
-    // must include the receiver of the state root wired to the sparse trie
-    prewarm_handle: CacheTaskHandle,
     /// Receiver for the state root
     state_root: Option<mpsc::Receiver<Result<StateRootComputeOutcome, ParallelStateRootError>>>,
-    /// Stream of block transactions
-    transactions: mpsc::Receiver<Result<Tx, Err>>,
 }
 
-impl<Tx, Err> PayloadHandle<Tx, Err> {
+impl PayloadHandle {
     /// Awaits the state root
     ///
     /// # Panics
@@ -478,37 +432,6 @@ impl<Tx, Err> PayloadHandle<Tx, Err> {
                 let _ = sender.send(MultiProofMessage::StateUpdate(source, state.clone()));
             }
         }
-    }
-
-    /// Returns a clone of the caches used by prewarming
-    pub(super) fn caches(&self) -> StateExecutionCache {
-        self.prewarm_handle.cache.clone()
-    }
-
-    /// Returns a clone of the cache metrics used by prewarming
-    pub(super) fn cache_metrics(&self) -> CachedStateMetrics {
-        self.prewarm_handle.cache_metrics.clone()
-    }
-
-    /// Terminates the pre-warming transaction processing.
-    ///
-    /// Note: This does not terminate the task yet.
-    pub(super) fn stop_prewarming_execution(&self) {
-        self.prewarm_handle.stop_prewarming_execution()
-    }
-
-    /// Terminates the entire caching task.
-    ///
-    /// If the [`BundleState`] is provided it will update the shared cache.
-    pub(super) fn terminate_caching(&mut self, block_output: Option<&BundleState>) {
-        self.prewarm_handle.terminate_caching(block_output)
-    }
-
-    /// Returns iterator yielding transactions from the stream.
-    pub fn iter_transactions(&mut self) -> impl Iterator<Item = Result<Tx, Err>> + '_ {
-        core::iter::repeat_with(|| self.transactions.recv())
-            .take_while(|res| res.is_ok())
-            .map(|res| res.unwrap())
     }
 }
 

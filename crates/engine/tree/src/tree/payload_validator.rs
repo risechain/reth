@@ -1,7 +1,6 @@
 //! Types and traits for validating blocks and payloads.
 
 use crate::tree::{
-    cached_state::CachedStateProvider,
     error::{InsertBlockError, InsertBlockErrorKind, InsertPayloadError},
     executor::WorkloadExecutor,
     instrumented_state::InstrumentedStateProvider,
@@ -24,10 +23,7 @@ use reth_engine_primitives::{
     ConfigureEngineEvm, ExecutableTxIterator, ExecutionPayload, InvalidBlockHook, PayloadValidator,
 };
 use reth_errors::{BlockExecutionError, ProviderResult};
-use reth_evm::{
-    block::BlockExecutor, execute::ExecutableTxFor, ConfigureEvm, EvmEnvFor, ExecutionCtxFor,
-    SpecFor,
-};
+use reth_evm::{block::BlockExecutor, ConfigureEvm, EvmEnvFor, ExecutionCtxFor, SpecFor};
 use reth_payload_primitives::{
     BuiltPayload, InvalidPayloadAttributesError, NewPayloadError, PayloadTypes,
 };
@@ -412,9 +408,6 @@ where
 
         // Spawn the appropriate processor based on strategy
         let (mut handle, strategy) = ensure_ok!(self.spawn_payload_processor(
-            env.clone(),
-            txs,
-            provider_builder,
             persisting_kind,
             parent_hash,
             ctx.state(),
@@ -422,29 +415,18 @@ where
             strategy,
         ));
 
-        // Use cached state provider before executing, used in execution after prewarming threads
-        // complete
-        let state_provider = CachedStateProvider::new_with_caches(
-            state_provider,
-            handle.caches(),
-            handle.cache_metrics(),
-        );
-
         // Execute the block and handle any execution errors
         let output = match if self.config.state_provider_metrics() {
             let state_provider = InstrumentedStateProvider::from_state_provider(&state_provider);
-            let result = self.execute_block(&state_provider, env, &input, &mut handle);
+            let result = self.execute_block(txs, &state_provider, env, &input, &mut handle);
             state_provider.record_total_latency();
             result
         } else {
-            self.execute_block(&state_provider, env, &input, &mut handle)
+            self.execute_block(txs, &state_provider, env, &input, &mut handle)
         } {
             Ok(output) => output,
             Err(err) => return self.handle_execution_error(input, err, &parent_block),
         };
-
-        // after executing the block we can stop executing transactions
-        handle.stop_prewarming_execution();
 
         let block = self.convert_to_block(input)?;
 
@@ -555,9 +537,6 @@ where
             .into())
         }
 
-        // terminate prewarming task with good state output
-        handle.terminate_caching(Some(&output.state));
-
         // If the block doesn't connect to the database tip, we don't save its trie updates, because
         // they may be incorrect as they were calculated on top of the forked block.
         //
@@ -626,16 +605,16 @@ where
     }
 
     /// Executes a block with the given state provider
-    fn execute_block<S, Err, T>(
+    fn execute_block<S, T>(
         &mut self,
+        transactions: impl ExecutableTxIterator<Evm>,
         state_provider: S,
         env: ExecutionEnv<Evm>,
         input: &BlockOrPayload<T>,
-        handle: &mut PayloadHandle<impl ExecutableTxFor<Evm>, Err>,
+        handle: &mut PayloadHandle,
     ) -> Result<BlockExecutionOutput<N::Receipt>, InsertBlockErrorKind>
     where
         S: StateProvider,
-        Err: core::error::Error + Send + Sync + 'static,
         V: PayloadValidator<T, Block = N::Block>,
         T: PayloadTypes<BuiltPayload: BuiltPayload<Primitives = N>>,
         Evm: ConfigureEngineEvm<T::ExecutionData, Primitives = N>,
@@ -678,7 +657,7 @@ where
         let state_hook = Box::new(handle.state_hook());
         let output = self.metrics.execute_metered(
             executor,
-            handle.iter_transactions().map(|res| res.map_err(BlockExecutionError::other)),
+            transactions.map(|res| res.map_err(BlockExecutionError::other)),
             state_hook,
         )?;
         let execution_finish = Instant::now();
@@ -830,26 +809,14 @@ where
     /// The method handles strategy fallbacks if the preferred approach fails, ensuring
     /// block execution always completes with a valid state root.
     #[allow(clippy::too_many_arguments)]
-    fn spawn_payload_processor<T: ExecutableTxIterator<Evm>>(
+    fn spawn_payload_processor(
         &mut self,
-        env: ExecutionEnv<Evm>,
-        txs: T,
-        provider_builder: StateProviderBuilder<N, P>,
         persisting_kind: PersistingKind,
         parent_hash: B256,
         state: &EngineApiTreeState<N>,
         block_num_hash: NumHash,
         strategy: StateRootStrategy,
-    ) -> Result<
-        (
-            PayloadHandle<
-                impl ExecutableTxFor<Evm> + use<N, P, Evm, V, T>,
-                impl core::error::Error + Send + Sync + 'static + use<N, P, Evm, V, T>,
-            >,
-            StateRootStrategy,
-        ),
-        InsertBlockErrorKind,
-    > {
+    ) -> Result<(PayloadHandle, StateRootStrategy), InsertBlockErrorKind> {
         match strategy {
             StateRootStrategy::StateRootTask => {
                 // use background tasks for state root calc
@@ -878,14 +845,7 @@ where
                 let spawn_start = Instant::now();
                 let (handle, strategy) = if trie_input.prefix_sets.is_empty() {
                     (
-                        self.payload_processor.spawn(
-                            env,
-                            txs,
-                            provider_builder,
-                            consistent_view,
-                            trie_input,
-                            &self.config,
-                        ),
+                        self.payload_processor.spawn(consistent_view, trie_input, &self.config),
                         StateRootStrategy::StateRootTask,
                     )
                 // if prefix sets are not empty, we spawn a task that exclusively handles cache
@@ -896,10 +856,7 @@ where
                         block=?block_num_hash,
                         "Disabling state root task due to non-empty prefix sets"
                     );
-                    (
-                        self.payload_processor.spawn_cache_exclusive(env, txs, provider_builder),
-                        StateRootStrategy::Parallel,
-                    )
+                    (PayloadHandle::default(), StateRootStrategy::Parallel)
                 };
 
                 // record prewarming initialization duration
@@ -912,8 +869,6 @@ where
             }
             strategy @ (StateRootStrategy::Parallel | StateRootStrategy::Synchronous) => {
                 let start = Instant::now();
-                let handle =
-                    self.payload_processor.spawn_cache_exclusive(env, txs, provider_builder);
 
                 // Record prewarming initialization duration
                 self.metrics
@@ -921,7 +876,7 @@ where
                     .spawn_payload_processor
                     .record(start.elapsed().as_secs_f64());
 
-                Ok((handle, strategy))
+                Ok((PayloadHandle::default(), strategy))
             }
         }
     }
