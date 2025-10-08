@@ -668,7 +668,9 @@ pub(super) struct MultiProofTask<Factory: DatabaseProviderFactory> {
     multiproof_manager: MultiproofManager<Factory>,
     /// multi proof task metrics
     metrics: MultiProofTaskMetrics,
+    ///
     no_proof: HashedPostState,
+    pending_input: Option<MultiproofInput<Factory>>,
 }
 
 impl<Factory> MultiProofTask<Factory>
@@ -704,6 +706,7 @@ where
             ),
             metrics,
             no_proof: Default::default(),
+            pending_input: None,
         }
     }
 
@@ -743,20 +746,21 @@ where
             {
                 back.proof_targets.extend(proof_targets);
                 // multi_added_removed_keys?
-            } else {
-                self.multiproof_manager.spawn_or_queue(
-                    MultiproofInput {
-                        config: self.config.clone(),
-                        source: None,
-                        hashed_state_update: Default::default(),
-                        proof_targets,
-                        proof_sequence_number: self.proof_sequencer.next_sequence(),
-                        state_root_message_sender: self.tx.clone(),
-                        multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
-                    }
-                    .into(),
-                );
+            } else if let Some(mut pending_input) = self.pending_input.take() {
+                pending_input.proof_targets.extend(proof_targets);
+                // multi_added_removed_keys?
+                self.multiproof_manager.spawn_or_queue(pending_input.into());
                 chunks += 1;
+            } else {
+                self.pending_input = Some(MultiproofInput {
+                    config: self.config.clone(),
+                    source: None,
+                    hashed_state_update: Default::default(),
+                    proof_targets,
+                    proof_sequence_number: self.proof_sequencer.next_sequence(),
+                    state_root_message_sender: self.tx.clone(),
+                    multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
+                });
             }
         };
 
@@ -890,20 +894,22 @@ where
                 back.hashed_state_update.extend(hashed_state_update);
                 back.proof_targets.extend(proof_targets);
                 // multi_added_removed_keys?
-            } else {
-                self.multiproof_manager.spawn_or_queue(
-                    MultiproofInput {
-                        config: self.config.clone(),
-                        source: Some(source),
-                        hashed_state_update,
-                        proof_targets,
-                        proof_sequence_number: self.proof_sequencer.next_sequence(),
-                        state_root_message_sender: self.tx.clone(),
-                        multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
-                    }
-                    .into(),
-                );
+            } else if let Some(mut pending_input) = self.pending_input.take() {
+                pending_input.hashed_state_update.extend(hashed_state_update);
+                pending_input.proof_targets.extend(proof_targets);
+                // multi_added_removed_keys?
+                self.multiproof_manager.spawn_or_queue(pending_input.into());
                 chunks += 1;
+            } else {
+                self.pending_input = Some(MultiproofInput {
+                    config: self.config.clone(),
+                    source: Some(source),
+                    hashed_state_update,
+                    proof_targets,
+                    proof_sequence_number: self.proof_sequencer.next_sequence(),
+                    state_root_message_sender: self.tx.clone(),
+                    multi_added_removed_keys: Some(multi_added_removed_keys.clone()),
+                });
             }
         };
 
@@ -1124,6 +1130,11 @@ where
                             prefetch_proofs_requested,
                             updates_finished,
                         ) {
+                            if let Some(final_input) = self.pending_input.take() {
+                                self.multiproof_manager.spawn_or_queue(final_input.into());
+                                state_update_proofs_requested += 1;
+                                continue;
+                            }
                             let _ = self.to_sparse_trie.send(SparseTrieUpdate {
                                 state: std::mem::take(&mut self.no_proof),
                                 multiproof: Default::default(),
