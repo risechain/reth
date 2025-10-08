@@ -21,7 +21,6 @@ use crate::tree::{
     ExecutionEnv, StateProviderBuilder,
 };
 use alloy_consensus::transaction::TxHashRef;
-use alloy_eips::Typed2718;
 use alloy_evm::Database;
 use alloy_primitives::{keccak256, map::B256Set, B256};
 use metrics::{Counter, Gauge, Histogram};
@@ -49,19 +48,6 @@ struct IndexedTransaction<Tx> {
     /// The wrapped transaction.
     tx: Tx,
 }
-
-/// Maximum standard Ethereum transaction type value.
-///
-/// Standard transaction types are:
-/// - Type 0: Legacy transactions (original Ethereum)
-/// - Type 1: EIP-2930 (access list transactions)
-/// - Type 2: EIP-1559 (dynamic fee transactions)
-/// - Type 3: EIP-4844 (blob transactions)
-/// - Type 4: EIP-7702 (set code authorization transactions)
-///
-/// Any transaction with a type > 4 is considered a non-standard/system transaction,
-/// typically used by L2s for special purposes (e.g., Optimism deposit transactions use type 126).
-const MAX_STANDARD_TX_TYPE: u8 = 4;
 
 /// A task that is responsible for caching and prewarming the cache by executing transactions
 /// individually in parallel.
@@ -163,45 +149,10 @@ where
 
             let mut tx_index = 0usize;
 
-            // Handle first transaction - special case for system transactions
-            if let Ok(first_tx) = pending.recv() {
-                // Move the transaction into the indexed wrapper to avoid an extra clone
-                let indexed_tx = IndexedTransaction { index: tx_index, tx: first_tx };
-                // Compute metadata from the moved value
-                let tx_ref = indexed_tx.tx.tx();
-                let is_system_tx = tx_ref.ty() > MAX_STANDARD_TX_TYPE;
-                let first_tx_hash = tx_ref.tx_hash();
-
-                // Check if this is a system transaction (type > 4)
-                // System transactions in the first position typically set critical metadata
-                // that affects all subsequent transactions (e.g., L1 block info, fees on L2s).
-                if is_system_tx {
-                    // Broadcast system transaction to all workers to ensure they have the
-                    // critical state. This is particularly important for L2s like Optimism
-                    // where the first deposit transaction contains essential block metadata.
-                    for handle in &handles {
-                        if let Err(err) = handle.send(indexed_tx.clone()) {
-                            warn!(
-                                target: "engine::tree::prewarm",
-                                tx_hash = %first_tx_hash,
-                                error = %err,
-                                "Failed to send deposit transaction to worker"
-                            );
-                        }
-                    }
-                } else {
-                    // Not a deposit, send to first worker via round-robin
-                    if let Err(err) = handles[0].send(indexed_tx) {
-                        warn!(
-                            target: "engine::tree::prewarm",
-                            task_idx = 0,
-                            error = %err,
-                            "Failed to send transaction to worker"
-                        );
-                    }
+            for _ in 0..32 {
+                if pending.recv().is_ok() {
+                    tx_index += 1;
                 }
-                executing += 1;
-                tx_index += 1;
             }
 
             // Process remaining transactions with round-robin distribution
