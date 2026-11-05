@@ -276,12 +276,10 @@ where
                     // `can_skip_node` is already set when the hash flag is set, so we don't need
                     // to check for the hash flag explicitly.
                     //
-                    // It is possible that the branch node at the key `seek_key` is not stored in
-                    // the database, so the walker will advance to the branch node after it. Because
-                    // of this, we need to check that the current walker key has a prefix of the key
-                    // that we seeked to.
+                    // A deeper stored key may leave unvisited hashed entries between the seek
+                    // prefix and the walker, so only skip the seek at the exact prefix.
                     if can_skip_node &&
-                        self.walker.key().is_some_and(|key| key.starts_with(&seek_prefix)) &&
+                        self.walker.key().is_some_and(|key| key == &seek_prefix) &&
                         self.walker.children_are_in_trie()
                     {
                         trace!(
